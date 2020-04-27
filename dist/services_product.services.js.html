@@ -1,0 +1,247 @@
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Source: services/product.services.js | Source: services/product.services.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/bootstrap.min.css">
+    <link type="text/css" rel="stylesheet" href="styles/prettify-jsdoc.css">
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/tui-doc.css">
+
+    
+</head>
+<body>
+<nav class="lnb" id="lnb">
+    <div class="logo" style="">
+        
+            <img src="img/toast-ui.png" width="100%" height="100%">
+        
+    </div>
+    <div class="title">
+        <h1><a href="index.html" class="link">Source: services/product.services.js</a></h1>
+        
+    </div>
+    <div class="search-container" id="search-container">
+        <input type="text" placeholder="Search">
+        <ul></ul>
+    </div>
+    
+    <div class="lnb-api hidden"><h3>Namespaces</h3><ul><li><a href="PolicyController.html">PolicyController</a><button type="button" class="hidden toggle-subnav btn btn-link">  <span class="glyphicon glyphicon-plus"></span></button><div class="hidden" id="PolicyController_sub"><div class="member-type">Methods</div><ul class="inner"><li><a href="PolicyController.html#list">list</a></li></ul></div></li><li><a href="ProductController.html">ProductController</a><button type="button" class="hidden toggle-subnav btn btn-link">  <span class="glyphicon glyphicon-plus"></span></button><div class="hidden" id="ProductController_sub"><div class="member-type">Methods</div><ul class="inner"><li><a href="ProductController.html#create">create</a></li><li><a href="ProductController.html#destroy">destroy</a></li><li><a href="ProductController.html#list">list</a></li><li><a href="ProductController.html#retrieve">retrieve</a></li><li><a href="ProductController.html#update">update</a></li></ul></div></li><li><a href="ProductService.html">ProductService</a><button type="button" class="hidden toggle-subnav btn btn-link">  <span class="glyphicon glyphicon-plus"></span></button><div class="hidden" id="ProductService_sub"><div class="member-type">Methods</div><ul class="inner"><li><a href="ProductService.html#.listProducts">listProducts</a></li></ul></div></li></ul></div>
+</nav>
+<div id="resizer"></div>
+
+<div class="main" id="main">
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>import { ResourceNotFoundError } from 'firis-service-sdk-test2/errors/BusinessErrors';
+import db from '../models';
+import BaseService from './base.services';
+import TranslationService from './translation.service';
+import ProductBenefitService from './productBenefit.service';
+import ProductPlanService from './productPlan.service';
+/**@namespace */
+class ProductService extends BaseService {
+    /**
+     * list - List all objects in the database
+     * @param  {Object} [filter] req  Express request object
+     * @returns {object[]}
+     */
+    static listProducts(filter) {
+        const search = !filter.search ? '%%' : `%${filter.search}%`;
+        let languageCondition = {};
+        if (filter.language) {
+            languageCondition = {
+                where: {
+                    $or: [
+                        { '$translations.language$': filter.language },
+                        { '$translations.language$': { $eq: null } }
+                    ]
+                }
+            };
+        }
+        return db.Product.findAndCountAll({
+            distinct: true,
+            include: [
+                {
+                    model: db.ProductTranslation,
+                    as: 'translations',
+                    required: false,
+                    ...languageCondition
+                },
+                {
+                    model: db.ProductEligibility,
+                    as: 'eligibility'
+                }
+            ],
+            where: {
+                $or: [
+                    { '$translations.name$': { $iLike: search } },
+                    { '$translations.term$': { $iLike: search } },
+                    { '$translations.clause$': { $iLike: search } },
+                    { code: { $iLike: search } }
+                ],
+                tenant_id: `${filter.tenant_id}`
+            },
+            order: [
+                ['created_at', 'DESC']
+            ],
+            limit: filter.limit,
+            offset: filter.offset,
+            subQuery: false
+        });
+    }
+
+    static findProduct({ id, tenant_id, config = {} }) {
+        return db.Product.findOne({
+            include: [
+                {
+                    model: db.ProductTranslation,
+                    as: 'translations'
+                },
+                {
+                    model: db.ProductEligibility,
+                    as: 'eligibility',
+                    required: false
+                },
+                {
+                    model: db.ProductBenefit,
+                    as: 'benefits'
+                },
+                {
+                    model: db.ProductPlan,
+                    as: 'plans'
+                }
+            ],
+            where: { id, tenant_id },
+            ...config
+        }).then(item => {
+            if (!item) throw new ResourceNotFoundError('Product');
+            return item;
+        });
+    }
+
+    static addEligibilityInfo(data) {
+        const formated = data;
+        formated.eligibility = {
+            min_premiums: 0,
+            min_age: 0,
+            max_age: 0
+        };
+        return formated;
+    }
+
+    static addProduct(data) {
+        const formatedTranslation = TranslationService.formatTranslation(data);
+        const formated = ProductService.addEligibilityInfo(formatedTranslation);
+        if (!formated.settings) {
+            formated.settings = {
+                defaultLanguage: 'en-US',
+                certificate_template_id: '',
+                autoCreateBill: 'Default'
+            };
+        }
+        return db.Product.create(formated, {
+            include: [
+                {
+                    model: db.ProductTranslation,
+                    as: 'translations'
+                },
+                {
+                    model: db.ProductEligibility,
+                    as: 'eligibility'
+                }
+            ]
+        });
+    }
+
+    static updateProduct({ id, tenant_id, ...data }) {
+        let config = {};
+        if (!Array.isArray(data.translations)) {
+            config = { include: [] };
+        }
+        return ProductService.findProduct({ id, tenant_id, config })
+            .then((product) => db.sequelize.transaction(transaction => {
+                const promiseArray = [];
+                if (data.type !== undefined) {
+                    if (product.type !== data.type) {
+                        for (let i = 0; i &lt; product.benefits.length; i += 1) {
+                            promiseArray.push(ProductBenefitService.deleteProductBenefit({
+                                id: product.benefits[i].id,
+                                tenant_id,
+                                transaction
+                            }));
+                        }
+                        for (let i = 0; i &lt; product.plans.length; i += 1) {
+                            promiseArray.push(ProductPlanService.deleteProductPlan({
+                                id: product.plans[i].id,
+                                tenant_id,
+                                transaction
+                            }));
+                        }
+                    }
+                }
+                promiseArray.push(TranslationService.updateTranslation({
+                    data,
+                    model: product,
+                    translationModel: db.ProductTranslation,
+                    foreignKey: 'product_id',
+                    transaction
+                }));
+                promiseArray.push(product.updateAttributes(data, transaction));
+                return Promise.all(promiseArray);
+            }));
+    }
+
+    static deleteProduct({ id, tenant_id }) {
+        return db.sequelize.transaction((t) => db.Product.destroy(
+            { where: { id, tenant_id }, individualHooks: true },
+            { transaction: t }
+        ));
+    }
+
+}
+
+export default ProductService;
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<footer>
+    <img class="logo" src="img/toast-ui.png" style="">
+    <div class="footer-text">NHN Entertainment. Frontend Development Lab</div>
+</footer>
+<script>prettyPrint();</script>
+<script src="scripts/jquery.min.js"></script>
+<script src="scripts/tui-doc.js"></script>
+<script src="scripts/linenumber.js"></script>
+
+    <script>
+        var id = '_sub'.replace(/"/g, '_');
+        var selectedApi = document.getElementById(id); // do not use jquery selector
+        var $selectedApi = $(selectedApi);
+
+        $selectedApi.removeClass('hidden');
+        $selectedApi.parent().find('.glyphicon').removeClass('glyphicon-plus').addClass('glyphicon-minus');
+        showLnbApi();
+    </script>
+
+</body>
+</html>
